@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '@/store/useStore'
 import { formatMoney, formatDateTime, formatDuration, getLevelName } from '@/utils/format'
-import { TECHNICIAN_LEVEL_CONFIG } from '@/types'
 import { Wallet, TrendingUp, Calendar, Download, DollarSign, Percent, Clock } from 'lucide-react'
 
 export default function CommissionPanel() {
@@ -140,7 +139,6 @@ export default function CommissionPanel() {
           </h3>
           <div className="grid grid-cols-2 gap-3">
             {technicianStats.slice(0, 6).map((stat, index) => {
-              const levelConfig = stat.technician ? TECHNICIAN_LEVEL_CONFIG[stat.technician.level] : null
               return (
                 <div key={stat.technicianId} className="border rounded-lg p-3">
                   <div className="flex items-center gap-3">

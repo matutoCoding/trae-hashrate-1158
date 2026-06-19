@@ -13,6 +13,18 @@ export const TECHNICIAN_LEVEL_CONFIG: Record<TechnicianLevel, {
 
 export type TechnicianStatus = 'idle' | 'busy' | 'break' | 'off'
 
+export type TechnicianCurrentStatus =
+  | { status: 'idle' | 'break' | 'off' }
+  | {
+      status: 'in_service'
+      bookingId: string
+      customerName: string
+      customerQueueNumber: number
+      endTime: Date
+      isGap?: boolean
+      nextService?: { startTime: Date; endTime: Date }
+    }
+
 export interface Technician {
   id: string
   name: string

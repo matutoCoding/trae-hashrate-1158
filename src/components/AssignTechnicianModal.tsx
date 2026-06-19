@@ -17,7 +17,7 @@ export default function AssignTechnicianModal({
   customer,
   suggestedTechnician,
 }: AssignTechnicianModalProps) {
-  const { technicians, confirmAssignment, handlePass } = useStore()
+  const { technicians, confirmAssignment, handlePass, getAvailableTechnicians } = useStore()
   const [selectedTechnicianId, setSelectedTechnicianId] = useState('')
   
   useEffect(() => {
@@ -28,11 +28,7 @@ export default function AssignTechnicianModal({
     }
   }, [suggestedTechnician, open])
   
-  const availableTechnicians = technicians.filter(t => {
-    if (t.status !== 'idle') return false
-    if (customer.requestedLevel && t.level !== customer.requestedLevel) return false
-    return true
-  })
+  const availableTechnicians = getAvailableTechnicians(customer.requestedLevel)
   
   const handleConfirm = () => {
     if (!selectedTechnicianId) {

@@ -11,6 +11,7 @@ import {
   BookingStatus,
   TECHNICIAN_LEVEL_CONFIG,
   TimeSegment,
+  TechnicianCurrentStatus,
 } from '@/types'
 
 interface AppActions {
@@ -39,10 +40,13 @@ interface AppActions {
   getTotalCommissions: (startDate?: Date, endDate?: Date) => { technicianId: string; total: number; records: CommissionRecord[] }[]
 
   isTechnicianBusy: (technicianId: string, time: Date) => boolean
-  getAvailableTechnicians: (level?: TechnicianLevel) => Technician[]
+  getAvailableTechnicians: (level?: TechnicianLevel, forTime?: Date) => Technician[]
   getCustomerBookings: (customerId: string) => Booking[]
   checkAndMergeConsecutiveBookings: (customerId: string, technicianId: string, newStartTime: Date, duration: number) => Booking | null
   getBookingActiveDuration: (booking: Booking) => number
+  getTechnicianCurrentStatus: (technicianId: string, time?: Date) => TechnicianCurrentStatus
+  isTechnicianAvailableForTime: (technicianId: string, startTime: Date, duration: number) => boolean
+  getTechnicianActiveSegment: (technicianId: string, time?: Date) => { booking: Booking; segment: TimeSegment } | null
 }
 
 const generateId = () => Math.random().toString(36).substr(2, 9)
@@ -680,11 +684,127 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     )
   },
 
-  getAvailableTechnicians: (level?) => {
+  getAvailableTechnicians: (level?, forTime?) => {
     const state = get()
-    return state.technicians.filter(
-      (t) => t.status === 'idle' && (!level || t.level === level)
+    const checkTime = forTime || new Date()
+    return state.technicians.filter((t) => {
+      if (t.status !== 'idle') return false
+      if (level && t.level !== level) return false
+      return !state.isTechnicianBusy(t.id, checkTime)
+    })
+  },
+
+  getTechnicianActiveSegment: (technicianId, time?) => {
+    const state = get()
+    const checkTime = time || new Date()
+    const activeBookings = state.bookings.filter(
+      (b) =>
+        b.technicianId === technicianId &&
+        b.status !== 'cancelled' &&
+        b.status !== 'completed'
     )
+    for (const booking of activeBookings) {
+      for (const segment of booking.segments) {
+        if (
+          segment.status !== 'cancelled' &&
+          checkTime >= segment.startTime &&
+          checkTime <= segment.endTime
+        ) {
+          return { booking, segment }
+        }
+      }
+    }
+    return null
+  },
+
+  getTechnicianCurrentStatus: (technicianId, time?) => {
+    const state = get()
+    const checkTime = time || new Date()
+    const tech = state.technicians.find((t) => t.id === technicianId)
+    if (!tech) return { status: 'off' as const }
+    if (tech.status === 'break') return { status: 'break' as const }
+    if (tech.status === 'off') return { status: 'off' as const }
+
+    const activeSegment = state.getTechnicianActiveSegment(technicianId, checkTime)
+    if (activeSegment) {
+      const customer = state.customers.find(
+        (c) => c.id === activeSegment.booking.customerId
+      )
+      return {
+        status: 'in_service' as const,
+        bookingId: activeSegment.booking.id,
+        customerName: customer?.name || '未知',
+        customerQueueNumber: customer?.queueNumber || 0,
+        endTime: activeSegment.segment.endTime,
+      }
+    }
+
+    const upcomingSegments: { booking: Booking; segment: TimeSegment }[] = []
+    const activeBookings = state.bookings.filter(
+      (b) =>
+        b.technicianId === technicianId &&
+        b.status !== 'cancelled' &&
+        b.status !== 'completed'
+    )
+    for (const booking of activeBookings) {
+      for (const segment of booking.segments) {
+        if (segment.status !== 'cancelled' && segment.startTime > checkTime) {
+          upcomingSegments.push({ booking, segment })
+        }
+      }
+    }
+    upcomingSegments.sort(
+      (a, b) => a.segment.startTime.getTime() - b.segment.startTime.getTime()
+    )
+
+    if (upcomingSegments.length > 0) {
+      const next = upcomingSegments[0]
+      const gapMinutes =
+        (next.segment.startTime.getTime() - checkTime.getTime()) / (60 * 1000)
+      if (gapMinutes <= 5) {
+        const customer = state.customers.find(
+          (c) => c.id === next.booking.customerId
+        )
+        return {
+          status: 'in_service' as const,
+          bookingId: next.booking.id,
+          customerName: customer?.name || '未知',
+          customerQueueNumber: customer?.queueNumber || 0,
+          endTime: next.segment.endTime,
+          isGap: true,
+          nextService: {
+            startTime: next.segment.startTime,
+            endTime: next.segment.endTime,
+          },
+        }
+      }
+    }
+
+    return { status: 'idle' as const }
+  },
+
+  isTechnicianAvailableForTime: (technicianId, startTime, duration) => {
+    const state = get()
+    const endTime = new Date(startTime.getTime() + duration * 60 * 1000)
+    const activeBookings = state.bookings.filter(
+      (b) =>
+        b.technicianId === technicianId &&
+        b.status !== 'cancelled' &&
+        b.status !== 'completed'
+    )
+    for (const booking of activeBookings) {
+      for (const segment of booking.segments) {
+        if (segment.status === 'cancelled') continue
+        if (
+          (startTime >= segment.startTime && startTime < segment.endTime) ||
+          (endTime > segment.startTime && endTime <= segment.endTime) ||
+          (startTime <= segment.startTime && endTime >= segment.endTime)
+        ) {
+          return false
+        }
+      }
+    }
+    return true
   },
 
   getCustomerBookings: (customerId) => {
