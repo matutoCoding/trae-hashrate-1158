@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '@/store/useStore'
 import { formatTime, waitTime, getCustomerStatusText, getCustomerStatusColor } from '@/utils/format'
-import { UserPlus, Users, Clock, AlertTriangle, CheckCircle, XCircle, SkipForward, CallButton } from 'lucide-react'
+import { UserPlus, Users, Clock, AlertTriangle, CheckCircle, XCircle, SkipForward, Phone } from 'lucide-react'
 import TakeNumberModal from './TakeNumberModal'
 import AssignTechnicianModal from './AssignTechnicianModal'
 import type { Customer, Technician } from '@/types'
@@ -58,7 +58,7 @@ export default function QueuePanel() {
             disabled={waitingCustomers.length === 0}
             className="px-4 py-2 bg-secondary-500 text-white rounded-lg hover:bg-secondary-600 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <CallButton className="w-4 h-4" />
+            <Phone className="w-4 h-4" />
             叫号
           </button>
         </div>

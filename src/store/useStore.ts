@@ -10,38 +10,59 @@ import {
   CustomerStatus,
   BookingStatus,
   TECHNICIAN_LEVEL_CONFIG,
+  TimeSegment,
 } from '@/types'
 
 interface AppActions {
   addTechnician: (tech: Omit<Technician, 'id'>) => void
   updateTechnician: (id: string, updates: Partial<Technician>) => void
   removeTechnician: (id: string) => void
-  
+
   takeQueueNumber: (customer: Omit<Customer, 'id' | 'queueNumber' | 'status' | 'queueTime' | 'passCount'>) => Customer
   callNextCustomer: () => { customer: Customer; technician?: Technician } | null
   confirmAssignment: (customerId: string, technicianId: string) => Booking | null
   startService: (bookingId: string) => void
   completeService: (bookingId: string) => void
-  
+
   handlePass: (customerId: string) => void
   cancelCustomer: (customerId: string) => void
-  
+
+  extendBooking: (bookingId: string, additionalMinutes: number) => Booking | null
   mergeBookings: (bookingIds: string[]) => Booking | null
   splitBooking: (bookingId: string, splitTime: Date) => Booking[] | null
+  cancelBookingSegment: (bookingId: string, cancelStart: Date, cancelEnd: Date) => Booking | null
   cancelBooking: (bookingId: string) => void
-  
+
   calculateCommission: (booking: Booking) => CommissionRecord
   getTechnicianBookings: (technicianId: string) => Booking[]
   getTechnicianCommissions: (technicianId: string, startDate?: Date, endDate?: Date) => CommissionRecord[]
   getTotalCommissions: (startDate?: Date, endDate?: Date) => { technicianId: string; total: number; records: CommissionRecord[] }[]
-  
+
   isTechnicianBusy: (technicianId: string, time: Date) => boolean
   getAvailableTechnicians: (level?: TechnicianLevel) => Technician[]
   getCustomerBookings: (customerId: string) => Booking[]
   checkAndMergeConsecutiveBookings: (customerId: string, technicianId: string, newStartTime: Date, duration: number) => Booking | null
+  getBookingActiveDuration: (booking: Booking) => number
 }
 
 const generateId = () => Math.random().toString(36).substr(2, 9)
+
+const createSegment = (startTime: Date, duration: number): TimeSegment => {
+  const endTime = new Date(startTime.getTime() + duration * 60 * 1000)
+  return {
+    id: generateId(),
+    startTime,
+    endTime,
+    duration,
+    status: 'active',
+  }
+}
+
+const calculateSegmentsDuration = (segments: TimeSegment[]): number => {
+  return segments
+    .filter(s => s.status !== 'cancelled')
+    .reduce((sum, s) => sum + s.duration, 0)
+}
 
 const initialTechnicians: Technician[] = [
   { id: generateId(), name: '张三', number: 1, level: 'senior', status: 'idle' },
@@ -174,6 +195,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       duration,
       status: 'confirmed',
       isMerged: false,
+      segments: [createSegment(startTime, duration)],
       createdAt: new Date(),
     }
 
@@ -275,6 +297,30 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }))
   },
 
+  extendBooking: (bookingId, additionalMinutes) => {
+    const state = get()
+    const booking = state.bookings.find((b) => b.id === bookingId)
+    if (!booking) return null
+    if (booking.status === 'cancelled' || booking.status === 'completed') return null
+
+    const newEndTime = new Date(booking.endTime.getTime() + additionalMinutes * 60 * 1000)
+    const newSegment = createSegment(booking.endTime, additionalMinutes)
+
+    const updatedBooking: Booking = {
+      ...booking,
+      endTime: newEndTime,
+      duration: booking.duration + additionalMinutes,
+      segments: [...booking.segments, newSegment],
+      isMerged: true,
+    }
+
+    set((s) => ({
+      bookings: s.bookings.map((b) => (b.id === bookingId ? updatedBooking : b)),
+    }))
+
+    return updatedBooking
+  },
+
   mergeBookings: (bookingIds) => {
     const state = get()
     const bookingsToMerge = state.bookings.filter((b) => bookingIds.includes(b.id))
@@ -299,6 +345,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       }
     }
 
+    const allSegments: TimeSegment[] = []
+    sortedBookings.forEach((b) => {
+      allSegments.push(...b.segments)
+    })
+
     const mergedBooking: Booking = {
       id: generateId(),
       customerId,
@@ -311,6 +362,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       status: 'confirmed',
       isMerged: true,
       mergedFrom: bookingIds,
+      segments: allSegments,
       createdAt: new Date(),
     }
 
@@ -328,11 +380,43 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get()
     const booking = state.bookings.find((b) => b.id === bookingId)
 
-    if (!booking || !booking.isMerged) return null
+    if (!booking) return null
 
     if (splitTime <= booking.startTime || splitTime >= booking.endTime) {
       return null
     }
+
+    const firstSegments: TimeSegment[] = []
+    const secondSegments: TimeSegment[] = []
+
+    booking.segments.forEach((seg) => {
+      if (seg.endTime <= splitTime) {
+        firstSegments.push(seg)
+      } else if (seg.startTime >= splitTime) {
+        secondSegments.push(seg)
+      } else {
+        const firstPartDuration = Math.ceil(
+          (splitTime.getTime() - seg.startTime.getTime()) / (60 * 1000)
+        )
+        const secondPartDuration = seg.duration - firstPartDuration
+
+        firstSegments.push({
+          ...seg,
+          id: generateId(),
+          endTime: splitTime,
+          duration: firstPartDuration,
+        })
+        secondSegments.push({
+          ...seg,
+          id: generateId(),
+          startTime: splitTime,
+          duration: secondPartDuration,
+        })
+      }
+    })
+
+    const firstDuration = firstSegments.reduce((sum, s) => sum + s.duration, 0)
+    const secondDuration = secondSegments.reduce((sum, s) => sum + s.duration, 0)
 
     const firstBooking: Booking = {
       id: generateId(),
@@ -340,10 +424,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       technicianId: booking.technicianId,
       startTime: booking.startTime,
       endTime: splitTime,
-      duration: Math.ceil((splitTime.getTime() - booking.startTime.getTime()) / (60 * 1000)),
+      duration: firstDuration,
       status: booking.status,
       isMerged: false,
       splitFrom: bookingId,
+      segments: firstSegments,
       createdAt: new Date(),
     }
 
@@ -353,10 +438,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       technicianId: booking.technicianId,
       startTime: splitTime,
       endTime: booking.endTime,
-      duration: Math.ceil((booking.endTime.getTime() - splitTime.getTime()) / (60 * 1000)),
+      duration: secondDuration,
       status: booking.status,
       isMerged: false,
       splitFrom: bookingId,
+      segments: secondSegments,
       createdAt: new Date(),
     }
 
@@ -371,23 +457,130 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     return [firstBooking, secondBooking]
   },
 
+  cancelBookingSegment: (bookingId, cancelStart, cancelEnd) => {
+    const state = get()
+    const booking = state.bookings.find((b) => b.id === bookingId)
+    if (!booking) return null
+
+    if (cancelStart < booking.startTime) cancelStart = booking.startTime
+    if (cancelEnd > booking.endTime) cancelEnd = booking.endTime
+    if (cancelStart >= cancelEnd) return null
+
+    const newSegments: TimeSegment[] = []
+
+    booking.segments.forEach((seg) => {
+      if (seg.status === 'cancelled') {
+        newSegments.push(seg)
+        return
+      }
+
+      if (seg.endTime <= cancelStart || seg.startTime >= cancelEnd) {
+        newSegments.push(seg)
+      } else if (seg.startTime >= cancelStart && seg.endTime <= cancelEnd) {
+        newSegments.push({ ...seg, status: 'cancelled' })
+      } else if (seg.startTime < cancelStart && seg.endTime > cancelEnd) {
+        const beforeDuration = Math.ceil(
+          (cancelStart.getTime() - seg.startTime.getTime()) / (60 * 1000)
+        )
+        const afterDuration = Math.ceil(
+          (seg.endTime.getTime() - cancelEnd.getTime()) / (60 * 1000)
+        )
+
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          endTime: cancelStart,
+          duration: beforeDuration,
+        })
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          startTime: cancelStart,
+          endTime: cancelEnd,
+          duration: Math.ceil(
+            (cancelEnd.getTime() - cancelStart.getTime()) / (60 * 1000)
+          ),
+          status: 'cancelled',
+        })
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          startTime: cancelEnd,
+          duration: afterDuration,
+        })
+      } else if (seg.startTime < cancelStart) {
+        const keepDuration = Math.ceil(
+          (cancelStart.getTime() - seg.startTime.getTime()) / (60 * 1000)
+        )
+        const cancelDuration = seg.duration - keepDuration
+
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          endTime: cancelStart,
+          duration: keepDuration,
+        })
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          startTime: cancelStart,
+          duration: cancelDuration,
+          status: 'cancelled',
+        })
+      } else {
+        const cancelDuration = Math.ceil(
+          (cancelEnd.getTime() - seg.startTime.getTime()) / (60 * 1000)
+        )
+        const keepDuration = seg.duration - cancelDuration
+
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          duration: cancelDuration,
+          endTime: cancelEnd,
+          status: 'cancelled',
+        })
+        newSegments.push({
+          ...seg,
+          id: generateId(),
+          startTime: cancelEnd,
+          duration: keepDuration,
+        })
+      }
+    })
+
+    const activeSegments = newSegments.filter((s) => s.status !== 'cancelled')
+    if (activeSegments.length === 0) {
+      get().cancelBooking(bookingId)
+      return null
+    }
+
+    const updatedBooking: Booking = {
+      ...booking,
+      segments: newSegments,
+    }
+
+    set((s) => ({
+      bookings: s.bookings.map((b) => (b.id === bookingId ? updatedBooking : b)),
+    }))
+
+    return updatedBooking
+  },
+
   cancelBooking: (bookingId) => {
     const state = get()
     const booking = state.bookings.find((b) => b.id === bookingId)
     if (!booking) return
 
-    if (booking.isMerged && booking.mergedFrom) {
-      const originalBookings = state.bookings.filter((b) => booking.mergedFrom?.includes(b.id))
-      if (originalBookings.length === 0) {
-        const splitTime = new Date(booking.startTime.getTime() + (booking.endTime.getTime() - booking.startTime.getTime()) / 2)
-        state.splitBooking(bookingId, splitTime)
-      }
-    }
-
     set((s) => ({
       bookings: s.bookings.map((b) =>
         b.id === bookingId
-          ? { ...b, status: 'cancelled' as BookingStatus, cancelledAt: new Date() }
+          ? {
+              ...b,
+              status: 'cancelled' as BookingStatus,
+              cancelledAt: new Date(),
+              segments: b.segments.map((s) => ({ ...s, status: 'cancelled' as const })),
+            }
           : b
       ),
       customers: s.customers.map((c) =>
@@ -411,9 +604,12 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }
 
     const levelConfig = TECHNICIAN_LEVEL_CONFIG[technician.level]
-    const hours = booking.duration / 60
-    const totalAmount = levelConfig.pricePerHour * hours
-    const commissionAmount = totalAmount * levelConfig.commissionRate
+    const effectiveDuration = state.getBookingActiveDuration(booking)
+    const totalHours = booking.duration / 60
+    const effectiveHours = effectiveDuration / 60
+    const totalAmount = levelConfig.pricePerHour * totalHours
+    const effectiveAmount = levelConfig.pricePerHour * effectiveHours
+    const commissionAmount = effectiveAmount * levelConfig.commissionRate
 
     const commission: CommissionRecord = {
       id: generateId(),
@@ -422,8 +618,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       customerId: booking.customerId,
       startTime: booking.startTime,
       duration: booking.duration,
+      effectiveDuration,
       totalAmount: Math.round(totalAmount * 100) / 100,
+      effectiveAmount: Math.round(effectiveAmount * 100) / 100,
       commissionRate: levelConfig.commissionRate,
+      commissionAmount: Math.round(commissionAmount * 100) / 100,
       technicianLevel: technician.level,
       createdAt: new Date(),
     }
@@ -461,7 +660,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
     return Object.entries(grouped).map(([technicianId, records]) => ({
       technicianId,
-      total: records.reduce((sum, r) => sum + r.totalAmount * r.commissionRate, 0),
+      total: records.reduce((sum, r) => sum + r.commissionAmount, 0),
       records,
     }))
   },
@@ -474,7 +673,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         b.status !== 'cancelled' &&
         b.status !== 'completed' &&
         time >= b.startTime &&
-        time <= b.endTime
+        time <= b.endTime &&
+        b.segments.some(
+          (s) => s.status !== 'cancelled' && time >= s.startTime && time <= s.endTime
+        )
     )
   },
 
@@ -502,6 +704,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     )
 
     const bookingsToMerge: string[] = []
+    const allSegments: TimeSegment[] = [createSegment(newStartTime, duration)]
     let earliestStart = newStartTime
     let latestEnd = newEndTime
 
@@ -515,6 +718,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         (booking.startTime <= newStartTime && booking.endTime >= newEndTime)
       ) {
         bookingsToMerge.push(booking.id)
+        allSegments.push(...booking.segments)
         if (booking.startTime < earliestStart) earliestStart = booking.startTime
         if (booking.endTime > latestEnd) latestEnd = booking.endTime
       }
@@ -531,6 +735,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         status: 'confirmed',
         isMerged: true,
         mergedFrom: bookingsToMerge,
+        segments: allSegments,
         createdAt: new Date(),
       }
 
@@ -545,5 +750,9 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     }
 
     return null
+  },
+
+  getBookingActiveDuration: (booking) => {
+    return calculateSegmentsDuration(booking.segments)
   },
 }))

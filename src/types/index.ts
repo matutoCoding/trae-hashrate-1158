@@ -39,6 +39,14 @@ export interface Customer {
 
 export type BookingStatus = 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'split'
 
+export interface TimeSegment {
+  id: string
+  startTime: Date
+  endTime: Date
+  duration: number
+  status: 'active' | 'cancelled' | 'completed'
+}
+
 export interface Booking {
   id: string
   customerId: string
@@ -50,6 +58,7 @@ export interface Booking {
   isMerged: boolean
   mergedFrom?: string[]
   splitFrom?: string
+  segments: TimeSegment[]
   createdAt: Date
   cancelledAt?: Date
   completedAt?: Date
@@ -62,8 +71,11 @@ export interface CommissionRecord {
   customerId: string
   startTime: Date
   duration: number
+  effectiveDuration: number
   totalAmount: number
+  effectiveAmount: number
   commissionRate: number
+  commissionAmount: number
   technicianLevel: TechnicianLevel
   createdAt: Date
 }

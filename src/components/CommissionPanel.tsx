@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useStore } from '@/store/useStore'
 import { formatMoney, formatDateTime, formatDuration, getLevelName } from '@/utils/format'
+import { TECHNICIAN_LEVEL_CONFIG } from '@/types'
 import { Wallet, TrendingUp, Calendar, Download, DollarSign, Percent, Clock } from 'lucide-react'
 
 export default function CommissionPanel() {
@@ -40,9 +41,9 @@ export default function CommissionPanel() {
       return true
     })
     
-    const totalRevenue = filtered.reduce((sum, c) => sum + c.totalAmount, 0)
-    const totalCommission = filtered.reduce((sum, c) => sum + c.totalAmount * c.commissionRate, 0)
-    const totalServiceTime = filtered.reduce((sum, c) => sum + c.duration, 0)
+    const totalRevenue = filtered.reduce((sum, c) => sum + c.effectiveAmount, 0)
+    const totalCommission = filtered.reduce((sum, c) => sum + c.commissionAmount, 0)
+    const totalServiceTime = filtered.reduce((sum, c) => sum + c.effectiveDuration, 0)
     
     return {
       count: filtered.length,
@@ -194,8 +195,6 @@ export default function CommissionPanel() {
               .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
               .map(commission => {
                 const tech = getTechnician(commission.technicianId)
-                const commissionAmount = commission.totalAmount * commission.commissionRate
-                
                 return (
                   <tr key={commission.id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-gray-600">
@@ -210,16 +209,21 @@ export default function CommissionPanel() {
                       {getLevelName(commission.technicianLevel)}
                     </td>
                     <td className="px-3 py-2 text-gray-600">
-                      {formatDuration(commission.duration)}
+                      {formatDuration(commission.effectiveDuration)}
+                      {commission.duration !== commission.effectiveDuration && (
+                        <span className="text-xs text-red-500 ml-1">
+                          (原{formatDuration(commission.duration)})
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-gray-700 font-medium">
-                      {formatMoney(commission.totalAmount)}
+                      {formatMoney(commission.effectiveAmount)}
                     </td>
                     <td className="px-3 py-2 text-gray-600">
                       {(commission.commissionRate * 100).toFixed(0)}%
                     </td>
                     <td className="px-3 py-2 text-green-600 font-semibold">
-                      {formatMoney(commissionAmount)}
+                      {formatMoney(commission.commissionAmount)}
                     </td>
                   </tr>
                 )
