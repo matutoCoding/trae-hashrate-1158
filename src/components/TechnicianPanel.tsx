@@ -1,6 +1,6 @@
 import { useStore } from '@/store/useStore'
 import { TECHNICIAN_LEVEL_CONFIG } from '@/types'
-import { getLevelName, getTechnicianStatusText, getTechnicianStatusColor, formatTime, formatDuration } from '@/utils/format'
+import { getLevelName, getTechnicianStatusColor, formatTime, formatDuration } from '@/utils/format'
 import { Users, Clock, UserCog, Coffee, LogOut, Pause, Play } from 'lucide-react'
 
 export default function TechnicianPanel() {
@@ -10,8 +10,8 @@ export default function TechnicianPanel() {
     b => b.status === 'confirmed' || b.status === 'in_progress'
   )
 
-  const getTechnicianBooking = (techId: string) => {
-    return activeBookings.find(b => b.technicianId === techId)
+  const getTechnicianBookings = (techId: string) => {
+    return activeBookings.filter(b => b.technicianId === techId)
   }
 
   const getCustomer = (customerId: string) => {
@@ -46,22 +46,27 @@ export default function TechnicianPanel() {
   const offCount = technicians.filter(t => t.status === 'off').length
 
   const renderTimeline = (techId: string) => {
-    const booking = getTechnicianBooking(techId)
-    if (!booking) return null
+    const techBookings = getTechnicianBookings(techId)
+    if (techBookings.length === 0) return null
 
     const activeSegment = getTechnicianActiveSegment(techId)
     const now = new Date()
-    const totalMs = booking.duration * 60 * 1000
-    const nowOffset = ((now.getTime() - booking.startTime.getTime()) / totalMs) * 100
-    const nowPosition = Math.max(0, Math.min(100, nowOffset))
+
+    const allSegments = techBookings.flatMap(b => b.segments)
+
+    const earliestStart = Math.min(...allSegments.map(s => s.startTime.getTime()))
+    const latestEnd = Math.max(...allSegments.map(s => s.endTime.getTime()))
+    const totalMs = latestEnd - earliestStart
+    if (totalMs <= 0) return null
+
+    const nowPosition = Math.max(0, Math.min(100, ((now.getTime() - earliestStart) / totalMs) * 100))
 
     return (
       <div className="mt-2">
         <div className="relative h-3 bg-gray-100 rounded-full overflow-hidden">
-          {booking.segments.map((seg) => {
-            const segOffset = seg.startTime.getTime() - booking.startTime.getTime()
-            const left = (segOffset / totalMs) * 100
-            const width = (seg.duration / booking.duration) * 100
+          {allSegments.map((seg) => {
+            const left = ((seg.startTime.getTime() - earliestStart) / totalMs) * 100
+            const width = ((seg.duration * 60 * 1000) / totalMs) * 100
             const isActive = activeSegment?.segment.id === seg.id
 
             return (
@@ -108,21 +113,18 @@ export default function TechnicianPanel() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {technicians.map(tech => {
             const currentStatus = getTechnicianCurrentStatus(tech.id)
-            const booking = getTechnicianBooking(tech.id)
+            const techBookings = getTechnicianBookings(tech.id)
             const activeSegment = getTechnicianActiveSegment(tech.id)
             const customer = activeSegment ? getCustomer(activeSegment.booking.customerId) : null
 
-            let displayStatus = tech.status
             let statusBgColor = ''
             let statusText = ''
 
             if (currentStatus.status === 'in_service') {
               if (currentStatus.isGap) {
-                displayStatus = 'idle'
                 statusBgColor = 'border-purple-200 bg-purple-50'
                 statusText = '空挡中'
               } else {
-                displayStatus = 'busy'
                 statusBgColor = 'border-red-200 bg-red-50'
                 statusText = '服务中'
               }
@@ -138,10 +140,12 @@ export default function TechnicianPanel() {
             }
 
             const avatarBgColor =
-              displayStatus === 'busy' ? 'bg-red-500' :
-              displayStatus === 'idle' ? 'bg-green-500' :
+              currentStatus.status === 'in_service' && !currentStatus.isGap ? 'bg-red-500' :
               currentStatus.status === 'in_service' && currentStatus.isGap ? 'bg-purple-500' :
+              tech.status === 'idle' ? 'bg-green-500' :
               tech.status === 'break' ? 'bg-yellow-500' : 'bg-gray-400'
+
+            const isInGap = currentStatus.status === 'in_service' && currentStatus.isGap
 
             return (
               <div
@@ -157,7 +161,7 @@ export default function TechnicianPanel() {
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-gray-800">{tech.name}</span>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${getTechnicianStatusColor(tech.status)}`}>
-                        {statusText || getTechnicianStatusText(tech.status)}
+                        {statusText}
                       </span>
                     </div>
                     <div className="text-sm text-gray-500 flex items-center gap-1">
@@ -168,22 +172,29 @@ export default function TechnicianPanel() {
                       </span>
                     </div>
 
-                    {currentStatus.status === 'in_service' && currentStatus.isGap && currentStatus.nextService && (
+                    {isInGap && (
                       <div className="mt-2 p-2 bg-white rounded text-sm border border-purple-200">
                         <div className="font-medium text-purple-700 flex items-center gap-1">
                           <Pause className="w-4 h-4" />
                           当前空挡中
                         </div>
-                        <div className="text-gray-600 text-xs mt-1">
-                          下一段服务: {formatTime(currentStatus.nextService.startTime)} - {formatTime(currentStatus.nextService.endTime)}
-                        </div>
+                        {currentStatus.gapPeriod && (
+                          <div className="text-gray-600 text-xs mt-1">
+                            空挡时间: {formatTime(currentStatus.gapPeriod.startTime)} - {formatTime(currentStatus.gapPeriod.endTime)}
+                          </div>
+                        )}
+                        {currentStatus.nextService && (
+                          <div className="text-gray-600 text-xs mt-0.5">
+                            下一段服务: {formatTime(currentStatus.nextService.startTime)} - {formatTime(currentStatus.nextService.endTime)}
+                          </div>
+                        )}
                         <div className="text-gray-500 text-xs">
                           客人: {currentStatus.customerName} ({currentStatus.customerQueueNumber.toString().padStart(3, '0')}号)
                         </div>
                       </div>
                     )}
 
-                    {activeSegment && customer && !(currentStatus.status === 'in_service' && currentStatus.isGap) && (
+                    {!isInGap && activeSegment && customer && (
                       <div className="mt-2 p-2 bg-white rounded text-sm">
                         <div className="font-medium text-gray-700 flex items-center gap-1">
                           <Play className="w-4 h-4 text-secondary-500" />
@@ -195,48 +206,72 @@ export default function TechnicianPanel() {
                           <span className="mx-1">~</span>
                           {formatTime(activeSegment.segment.endTime)}
                         </div>
-                        {booking && getBookingActiveDuration(booking) < booking.duration && (
-                          <div className="text-xs text-orange-600 mt-1">
-                            有效时长: {formatDuration(getBookingActiveDuration(booking))} / 原: {formatDuration(booking.duration)}
-                          </div>
-                        )}
-                        {renderTimeline(tech.id)}
-                        <div className="mt-2 flex gap-2">
-                          {booking?.status === 'confirmed' && (
-                            <button
-                              onClick={() => startService(booking.id)}
-                              className="flex-1 px-2 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-                            >
-                              开始服务
-                            </button>
-                          )}
-                          {booking?.status === 'in_progress' && (
-                            <button
-                              onClick={() => completeService(booking.id)}
-                              className="flex-1 px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                            >
-                              完成服务
-                            </button>
-                          )}
-                        </div>
                       </div>
                     )}
 
-                    {booking && !activeSegment && currentStatus.status === 'idle' && (
-                      <div className="mt-2 p-2 bg-white rounded text-sm">
-                        <div className="font-medium text-gray-700">
-                          有后续预约
-                        </div>
-                        <div className="text-gray-500 text-xs">
-                          客人: {getCustomer(booking.customerId)?.name}
-                        </div>
+                    {techBookings.length > 0 && (
+                      <div className="mt-2">
+                        {techBookings.map(booking => {
+                          const bookingCustomer = getCustomer(booking.customerId)
+                          const activeDur = getBookingActiveDuration(booking)
+                          return (
+                            <div key={booking.id} className="p-2 bg-white rounded text-sm mb-1 last:mb-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-700 text-xs font-medium">
+                                  {bookingCustomer?.name || '未知'} ({bookingCustomer?.queueNumber.toString().padStart(3, '0') || '---'}号)
+                                </span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  booking.status === 'in_progress' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
+                                }`}>
+                                  {booking.status === 'in_progress' ? '进行中' : '已确认'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1 text-xs text-gray-500 mt-0.5">
+                                <Clock className="w-3 h-3" />
+                                {formatTime(booking.startTime)} ~ {formatTime(booking.endTime)}
+                                {activeDur < booking.duration && (
+                                  <span className="text-orange-600 ml-1">
+                                    (有效{formatDuration(activeDur)})
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex gap-0.5 h-1.5 rounded overflow-hidden mt-1">
+                                {booking.segments.map(seg => (
+                                  <div
+                                    key={seg.id}
+                                    className={`h-full ${seg.status === 'cancelled' ? 'bg-red-300' : 'bg-secondary-400'}`}
+                                    style={{ width: `${(seg.duration / booking.duration) * 100}%` }}
+                                  />
+                                ))}
+                              </div>
+                              <div className="mt-1 flex gap-1">
+                                {booking.status === 'confirmed' && (
+                                  <button
+                                    onClick={() => startService(booking.id)}
+                                    className="flex-1 px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+                                  >
+                                    开始服务
+                                  </button>
+                                )}
+                                {booking.status === 'in_progress' && (
+                                  <button
+                                    onClick={() => completeService(booking.id)}
+                                    className="flex-1 px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                                  >
+                                    完成服务
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
                         {renderTimeline(tech.id)}
                       </div>
                     )}
                   </div>
                 </div>
 
-                {tech.status !== 'busy' && currentStatus.status !== 'in_service' && (
+                {tech.status !== 'busy' && !isInGap && currentStatus.status !== 'in_service' && (
                   <div className="mt-3 flex gap-2">
                     <button
                       onClick={() => toggleTechnicianStatus(tech.id, tech.status)}

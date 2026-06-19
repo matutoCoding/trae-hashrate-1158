@@ -22,6 +22,7 @@ export type TechnicianCurrentStatus =
       customerQueueNumber: number
       endTime: Date
       isGap?: boolean
+      gapPeriod?: { startTime: Date; endTime: Date }
       nextService?: { startTime: Date; endTime: Date }
     }
 

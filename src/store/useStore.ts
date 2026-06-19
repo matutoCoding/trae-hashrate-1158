@@ -137,8 +137,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       const requestedTech = state.technicians.find(
         (t) => t.id === nextCustomer.requestedTechnicianId
       )
-      if (requestedTech && requestedTech.status === 'idle') {
-        assignedTechnician = requestedTech
+      if (requestedTech && requestedTech.status !== 'break' && requestedTech.status !== 'off') {
+        if (!state.isTechnicianBusy(requestedTech.id, new Date())) {
+          assignedTechnician = requestedTech
+        }
       }
     } else {
       const availableTechs = state.getAvailableTechnicians(
@@ -163,11 +165,14 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const customer = state.customers.find((c) => c.id === customerId)
     const technician = state.technicians.find((t) => t.id === technicianId)
 
-    if (!customer || !technician || technician.status !== 'idle') return null
+    if (!customer || !technician) return null
+    if (technician.status === 'break' || technician.status === 'off') return null
 
     const startTime = new Date()
     const duration = state.timeSlotMinutes
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000)
+
+    if (!state.isTechnicianAvailableForTime(technicianId, startTime, duration)) return null
 
     const mergedBooking = state.checkAndMergeConsecutiveBookings(
       customerId,
@@ -183,7 +188,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
         ),
         technicians: s.technicians.map((t) =>
           t.id === technicianId
-            ? { ...t, status: 'busy' as TechnicianStatus, currentBookingId: mergedBooking.id }
+            ? {
+                ...t,
+                status: 'busy' as TechnicianStatus,
+                currentBookingId: t.currentBookingId || mergedBooking.id,
+              }
             : t
         ),
       }))
@@ -210,7 +219,11 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       ),
       technicians: s.technicians.map((t) =>
         t.id === technicianId
-          ? { ...t, status: 'busy' as TechnicianStatus, currentBookingId: newBooking.id }
+          ? {
+              ...t,
+              status: 'busy' as TechnicianStatus,
+              currentBookingId: t.currentBookingId || newBooking.id,
+            }
           : t
       ),
     }))
@@ -235,8 +248,10 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
 
     const commission = state.calculateCommission(booking)
 
-    set((s) => ({
-      bookings: s.bookings.map((b) =>
+    const technicianId = booking.technicianId
+
+    set((s) => {
+      const updatedBookings = s.bookings.map((b) =>
         b.id === bookingId
           ? {
               ...b,
@@ -245,19 +260,44 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
               endTime: new Date(),
             }
           : b
-      ),
-      customers: s.customers.map((c) =>
-        c.id === booking.customerId
-          ? { ...c, status: 'completed' as CustomerStatus }
-          : c
-      ),
-      technicians: s.technicians.map((t) =>
-        t.currentBookingId === bookingId
-          ? { ...t, status: 'idle' as TechnicianStatus, currentBookingId: undefined }
-          : t
-      ),
-      commissions: [...s.commissions, commission],
-    }))
+      )
+
+      const hasOtherActiveBookings = updatedBookings.some(
+        (b) =>
+          b.technicianId === technicianId &&
+          b.id !== bookingId &&
+          b.status !== 'cancelled' &&
+          b.status !== 'completed'
+      )
+
+      return {
+        bookings: updatedBookings,
+        customers: s.customers.map((c) =>
+          c.id === booking.customerId
+            ? { ...c, status: 'completed' as CustomerStatus }
+            : c
+        ),
+        technicians: s.technicians.map((t) => {
+          if (t.id !== technicianId) return t
+          if (hasOtherActiveBookings) {
+            const otherActive = updatedBookings.find(
+              (b) =>
+                b.technicianId === technicianId &&
+                b.id !== bookingId &&
+                b.status !== 'cancelled' &&
+                b.status !== 'completed'
+            )
+            return {
+              ...t,
+              status: 'busy' as TechnicianStatus,
+              currentBookingId: otherActive?.id || t.currentBookingId,
+            }
+          }
+          return { ...t, status: 'idle' as TechnicianStatus, currentBookingId: undefined }
+        }),
+        commissions: [...s.commissions, commission],
+      }
+    })
   },
 
   handlePass: (customerId) => {
@@ -576,28 +616,55 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const booking = state.bookings.find((b) => b.id === bookingId)
     if (!booking) return
 
-    set((s) => ({
-      bookings: s.bookings.map((b) =>
+    const technicianId = booking.technicianId
+
+    set((s) => {
+      const updatedBookings = s.bookings.map((b) =>
         b.id === bookingId
           ? {
               ...b,
               status: 'cancelled' as BookingStatus,
               cancelledAt: new Date(),
-              segments: b.segments.map((s) => ({ ...s, status: 'cancelled' as const })),
+              segments: b.segments.map((seg) => ({ ...seg, status: 'cancelled' as const })),
             }
           : b
-      ),
-      customers: s.customers.map((c) =>
-        c.id === booking.customerId
-          ? { ...c, status: 'cancelled' as CustomerStatus }
-          : c
-      ),
-      technicians: s.technicians.map((t) =>
-        t.currentBookingId === bookingId
-          ? { ...t, status: 'idle' as TechnicianStatus, currentBookingId: undefined }
-          : t
-      ),
-    }))
+      )
+
+      const hasOtherActiveBookings = updatedBookings.some(
+        (b) =>
+          b.technicianId === technicianId &&
+          b.id !== bookingId &&
+          b.status !== 'cancelled' &&
+          b.status !== 'completed'
+      )
+
+      return {
+        bookings: updatedBookings,
+        customers: s.customers.map((c) =>
+          c.id === booking.customerId
+            ? { ...c, status: 'cancelled' as CustomerStatus }
+            : c
+        ),
+        technicians: s.technicians.map((t) => {
+          if (t.id !== technicianId) return t
+          if (hasOtherActiveBookings) {
+            const otherActive = updatedBookings.find(
+              (b) =>
+                b.technicianId === technicianId &&
+                b.id !== bookingId &&
+                b.status !== 'cancelled' &&
+                b.status !== 'completed'
+            )
+            return {
+              ...t,
+              status: 'busy' as TechnicianStatus,
+              currentBookingId: otherActive?.id || t.currentBookingId,
+            }
+          }
+          return { ...t, status: 'idle' as TechnicianStatus, currentBookingId: undefined }
+        }),
+      }
+    })
   },
 
   calculateCommission: (booking) => {
@@ -688,7 +755,7 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
     const state = get()
     const checkTime = forTime || new Date()
     return state.technicians.filter((t) => {
-      if (t.status !== 'idle') return false
+      if (t.status === 'break' || t.status === 'off') return false
       if (level && t.level !== level) return false
       return !state.isTechnicianBusy(t.id, checkTime)
     })
@@ -739,44 +806,78 @@ export const useStore = create<AppState & AppActions>((set, get) => ({
       }
     }
 
-    const upcomingSegments: { booking: Booking; segment: TimeSegment }[] = []
     const activeBookings = state.bookings.filter(
       (b) =>
         b.technicianId === technicianId &&
         b.status !== 'cancelled' &&
         b.status !== 'completed'
     )
+
+    let gapPeriod: { startTime: Date; endTime: Date } | undefined
+
+    for (const booking of activeBookings) {
+      const isInBookingRange = checkTime >= booking.startTime && checkTime <= booking.endTime
+      if (!isInBookingRange) continue
+
+      for (const seg of booking.segments) {
+        if (seg.status === 'cancelled' && checkTime >= seg.startTime && checkTime <= seg.endTime) {
+          gapPeriod = { startTime: seg.startTime, endTime: seg.endTime }
+          break
+        }
+      }
+      if (gapPeriod) break
+    }
+
+    const allUpcomingSegments: { booking: Booking; segment: TimeSegment }[] = []
     for (const booking of activeBookings) {
       for (const segment of booking.segments) {
         if (segment.status !== 'cancelled' && segment.startTime > checkTime) {
-          upcomingSegments.push({ booking, segment })
+          allUpcomingSegments.push({ booking, segment })
         }
       }
     }
-    upcomingSegments.sort(
+    allUpcomingSegments.sort(
       (a, b) => a.segment.startTime.getTime() - b.segment.startTime.getTime()
     )
 
-    if (upcomingSegments.length > 0) {
-      const next = upcomingSegments[0]
-      const gapMinutes =
-        (next.segment.startTime.getTime() - checkTime.getTime()) / (60 * 1000)
-      if (gapMinutes <= 5) {
-        const customer = state.customers.find(
-          (c) => c.id === next.booking.customerId
-        )
-        return {
-          status: 'in_service' as const,
-          bookingId: next.booking.id,
-          customerName: customer?.name || '未知',
-          customerQueueNumber: customer?.queueNumber || 0,
+    if (allUpcomingSegments.length > 0) {
+      const next = allUpcomingSegments[0]
+      const customer = state.customers.find(
+        (c) => c.id === next.booking.customerId
+      )
+      const result: TechnicianCurrentStatus = {
+        status: 'in_service' as const,
+        bookingId: next.booking.id,
+        customerName: customer?.name || '未知',
+        customerQueueNumber: customer?.queueNumber || 0,
+        endTime: next.segment.endTime,
+        isGap: true,
+        nextService: {
+          startTime: next.segment.startTime,
           endTime: next.segment.endTime,
-          isGap: true,
-          nextService: {
-            startTime: next.segment.startTime,
-            endTime: next.segment.endTime,
-          },
-        }
+        },
+      }
+      if (gapPeriod) {
+        result.gapPeriod = gapPeriod
+      }
+      return result
+    }
+
+    if (gapPeriod) {
+      const booking = activeBookings.find(
+        (b) => checkTime >= b.startTime && checkTime <= b.endTime
+      )
+      const customer = booking
+        ? state.customers.find((c) => c.id === booking.customerId)
+        : undefined
+      return {
+        status: 'in_service' as const,
+        bookingId: booking?.id || '',
+        customerName: customer?.name || '未知',
+        customerQueueNumber: customer?.queueNumber || 0,
+        endTime: gapPeriod.endTime,
+        isGap: true,
+        gapPeriod,
       }
     }
 
