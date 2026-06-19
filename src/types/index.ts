@@ -102,3 +102,11 @@ export interface AppState {
   maxPassCount: number
   timeSlotMinutes: number
 }
+
+export interface GapInfo {
+  startTime: Date
+  endTime: Date
+  duration: number
+  prevSegment?: { bookingId: string; endTime: Date }
+  nextSegment?: { bookingId: string; startTime: Date }
+}

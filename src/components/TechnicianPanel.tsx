@@ -1,10 +1,15 @@
+import { useState } from 'react'
 import { useStore } from '@/store/useStore'
-import { TECHNICIAN_LEVEL_CONFIG } from '@/types'
+import { TECHNICIAN_LEVEL_CONFIG, type Technician, type GapInfo } from '@/types'
 import { getLevelName, getTechnicianStatusColor, formatTime, formatDuration } from '@/utils/format'
-import { Users, Clock, UserCog, Coffee, LogOut, Pause, Play } from 'lucide-react'
+import { Users, Clock, UserCog, Coffee, LogOut, Pause, Play, CalendarPlus } from 'lucide-react'
+import GapBookingModal from './GapBookingModal'
 
 export default function TechnicianPanel() {
-  const { technicians, bookings, customers, updateTechnician, startService, completeService, getTechnicianCurrentStatus, getTechnicianActiveSegment, getBookingActiveDuration } = useStore()
+  const { technicians, bookings, customers, updateTechnician, startService, completeService, getTechnicianCurrentStatus, getTechnicianActiveSegment, getBookingActiveDuration, getTechnicianGaps } = useStore()
+  const [gapModalOpen, setGapModalOpen] = useState(false)
+  const [selectedTechnician, setSelectedTechnician] = useState<Technician | null>(null)
+  const [selectedGap, setSelectedGap] = useState<GapInfo | null>(null)
 
   const activeBookings = bookings.filter(
     b => b.status === 'confirmed' || b.status === 'in_progress'
@@ -27,6 +32,12 @@ export default function TechnicianPanel() {
     updateTechnician(techId, { status: newStatus })
   }
 
+  const handleGapClick = (tech: Technician, gap: GapInfo) => {
+    setSelectedTechnician(tech)
+    setSelectedGap(gap)
+    setGapModalOpen(true)
+  }
+
   const idleCount = technicians.filter(t => {
     const status = getTechnicianCurrentStatus(t.id)
     return status.status === 'idle'
@@ -45,12 +56,13 @@ export default function TechnicianPanel() {
   const breakCount = technicians.filter(t => t.status === 'break').length
   const offCount = technicians.filter(t => t.status === 'off').length
 
-  const renderTimeline = (techId: string) => {
-    const techBookings = getTechnicianBookings(techId)
+  const renderTimeline = (tech: Technician) => {
+    const techBookings = getTechnicianBookings(tech.id)
     if (techBookings.length === 0) return null
 
-    const activeSegment = getTechnicianActiveSegment(techId)
+    const activeSegment = getTechnicianActiveSegment(tech.id)
     const now = new Date()
+    const gaps = getTechnicianGaps(tech.id)
 
     const allSegments = techBookings.flatMap(b => b.segments)
 
@@ -63,31 +75,54 @@ export default function TechnicianPanel() {
 
     return (
       <div className="mt-2">
-        <div className="relative h-3 bg-gray-100 rounded-full overflow-hidden">
-          {allSegments.map((seg) => {
-            const left = ((seg.startTime.getTime() - earliestStart) / totalMs) * 100
-            const width = ((seg.duration * 60 * 1000) / totalMs) * 100
-            const isActive = activeSegment?.segment.id === seg.id
+        <div className="relative h-6 bg-gray-100 rounded-full overflow-hidden">
+          {techBookings.map(booking =>
+            booking.segments.map((seg) => {
+              const left = ((seg.startTime.getTime() - earliestStart) / totalMs) * 100
+              const width = ((seg.duration * 60 * 1000) / totalMs) * 100
+              const isActive = activeSegment?.segment.id === seg.id
 
-            return (
-              <div
-                key={seg.id}
-                className={`absolute top-0 h-full ${
-                  seg.status === 'cancelled'
-                    ? 'bg-red-300'
-                    : isActive
-                    ? 'bg-secondary-500'
-                    : 'bg-secondary-300'
-                }`}
-                style={{ left: `${left}%`, width: `${width}%` }}
-                title={`${formatTime(seg.startTime)} - ${formatTime(seg.endTime)} (${formatDuration(seg.duration)}${seg.status === 'cancelled' ? ' 已取消' : isActive ? ' 进行中' : ''})`}
-              />
-            )
-          })}
+              if (seg.status === 'cancelled') {
+                const gapInfo = gaps.find(
+                  g => g.startTime.getTime() === seg.startTime.getTime() && g.endTime.getTime() === seg.endTime.getTime()
+                )
+                const gap = gapInfo || { startTime: seg.startTime, endTime: seg.endTime, duration: seg.duration }
+                return (
+                  <div
+                    key={seg.id}
+                    className="absolute top-0 h-full bg-red-200 cursor-pointer hover:bg-red-300 transition-colors flex items-center justify-center"
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`空挡: ${formatTime(seg.startTime)} - ${formatTime(seg.endTime)} (${formatDuration(seg.duration)}) - 点击预约`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleGapClick(tech, gap)
+                    }}
+                  >
+                    <CalendarPlus className="w-3 h-3 text-red-600" />
+                  </div>
+                )
+              }
+
+              return (
+                <div
+                  key={seg.id}
+                  className={`absolute top-0 h-full ${
+                    isActive ? 'bg-secondary-500' : 'bg-secondary-300'
+                  }`}
+                  style={{ left: `${left}%`, width: `${width}%` }}
+                  title={`${formatTime(seg.startTime)} - ${formatTime(seg.endTime)} (${formatDuration(seg.duration)}${isActive ? ' 进行中' : ''})`}
+                />
+              )
+            })
+          )}
           <div
-            className="absolute top-0 h-full w-0.5 bg-red-500 z-10"
+            className="absolute top-0 h-full w-0.5 bg-red-500 z-20"
             style={{ left: `${nowPosition}%` }}
           />
+        </div>
+        <div className="flex justify-between text-xs text-gray-500 mt-1">
+          <span>{formatTime(new Date(earliestStart))}</span>
+          <span>{formatTime(new Date(latestEnd))}</span>
         </div>
       </div>
     )
@@ -116,6 +151,7 @@ export default function TechnicianPanel() {
             const techBookings = getTechnicianBookings(tech.id)
             const activeSegment = getTechnicianActiveSegment(tech.id)
             const customer = activeSegment ? getCustomer(activeSegment.booking.customerId) : null
+            const gaps = getTechnicianGaps(tech.id)
 
             let statusBgColor = ''
             let statusText = ''
@@ -172,25 +208,34 @@ export default function TechnicianPanel() {
                       </span>
                     </div>
 
-                    {isInGap && (
+                    {isInGap && currentStatus.gapPeriod && (
                       <div className="mt-2 p-2 bg-white rounded text-sm border border-purple-200">
                         <div className="font-medium text-purple-700 flex items-center gap-1">
                           <Pause className="w-4 h-4" />
                           当前空挡中
                         </div>
-                        {currentStatus.gapPeriod && (
-                          <div className="text-gray-600 text-xs mt-1">
-                            空挡时间: {formatTime(currentStatus.gapPeriod.startTime)} - {formatTime(currentStatus.gapPeriod.endTime)}
-                          </div>
-                        )}
+                        <div className="text-gray-600 text-xs mt-1">
+                          空挡: {formatTime(currentStatus.gapPeriod.startTime)} - {formatTime(currentStatus.gapPeriod.endTime)}
+                        </div>
                         {currentStatus.nextService && (
-                          <div className="text-gray-600 text-xs mt-0.5">
-                            下一段服务: {formatTime(currentStatus.nextService.startTime)} - {formatTime(currentStatus.nextService.endTime)}
+                          <div className="text-gray-600 text-xs">
+                            下段服务: {formatTime(currentStatus.nextService.startTime)} - {formatTime(currentStatus.nextService.endTime)}
                           </div>
                         )}
                         <div className="text-gray-500 text-xs">
                           客人: {currentStatus.customerName} ({currentStatus.customerQueueNumber.toString().padStart(3, '0')}号)
                         </div>
+                        <button
+                          onClick={() => handleGapClick(tech, {
+                            startTime: currentStatus.gapPeriod!.startTime,
+                            endTime: currentStatus.gapPeriod!.endTime,
+                            duration: Math.floor((currentStatus.gapPeriod!.endTime.getTime() - currentStatus.gapPeriod!.startTime.getTime()) / (60 * 1000)),
+                          })}
+                          className="mt-2 w-full py-1.5 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 transition-colors flex items-center justify-center gap-1"
+                        >
+                          <CalendarPlus className="w-3 h-3" />
+                          预约此空挡
+                        </button>
                       </div>
                     )}
 
@@ -211,6 +256,7 @@ export default function TechnicianPanel() {
 
                     {techBookings.length > 0 && (
                       <div className="mt-2">
+                        <div className="text-xs text-gray-500 mb-1">活跃钟单 ({techBookings.length})</div>
                         {techBookings.map(booking => {
                           const bookingCustomer = getCustomer(booking.customerId)
                           const activeDur = getBookingActiveDuration(booking)
@@ -265,7 +311,21 @@ export default function TechnicianPanel() {
                             </div>
                           )
                         })}
-                        {renderTimeline(tech.id)}
+                        {renderTimeline(tech)}
+                        {gaps.length > 0 && (
+                          <div className="mt-2 text-xs text-gray-500">
+                            <span>可预约空挡: </span>
+                            {gaps.slice(0, 3).map((gap, idx) => (
+                              <button
+                                key={idx}
+                                onClick={() => handleGapClick(tech, gap)}
+                                className="inline-block ml-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors"
+                              >
+                                {formatTime(gap.startTime)} ({formatDuration(gap.duration)})
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -294,6 +354,13 @@ export default function TechnicianPanel() {
           })}
         </div>
       </div>
+
+      <GapBookingModal
+        open={gapModalOpen}
+        onClose={() => setGapModalOpen(false)}
+        technician={selectedTechnician}
+        gap={selectedGap}
+      />
     </div>
   )
 }

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '@/store/useStore'
 import { TECHNICIAN_LEVEL_CONFIG, type Customer, type Technician } from '@/types'
-import { getLevelName } from '@/utils/format'
+import { getLevelName, formatDuration } from '@/utils/format'
 import { X, UserCheck, Clock, Star } from 'lucide-react'
 
 interface AssignTechnicianModalProps {
@@ -11,6 +11,8 @@ interface AssignTechnicianModalProps {
   suggestedTechnician?: Technician
 }
 
+const DURATION_OPTIONS = [30, 60, 90, 120]
+
 export default function AssignTechnicianModal({
   open,
   onClose,
@@ -19,6 +21,7 @@ export default function AssignTechnicianModal({
 }: AssignTechnicianModalProps) {
   const { technicians, confirmAssignment, handlePass, getAvailableTechnicians } = useStore()
   const [selectedTechnicianId, setSelectedTechnicianId] = useState('')
+  const [selectedDuration, setSelectedDuration] = useState(60)
   
   useEffect(() => {
     if (suggestedTechnician) {
@@ -26,9 +29,12 @@ export default function AssignTechnicianModal({
     } else {
       setSelectedTechnicianId('')
     }
+    setSelectedDuration(60)
   }, [suggestedTechnician, open])
   
-  const availableTechnicians = getAvailableTechnicians(customer.requestedLevel)
+  const availableTechnicians = useMemo(() => {
+    return getAvailableTechnicians(customer.requestedLevel, new Date(), selectedDuration)
+  }, [getAvailableTechnicians, customer.requestedLevel, selectedDuration])
   
   const handleConfirm = () => {
     if (!selectedTechnicianId) {
@@ -36,11 +42,11 @@ export default function AssignTechnicianModal({
       return
     }
     
-    const booking = confirmAssignment(customer.id, selectedTechnicianId)
+    const booking = confirmAssignment(customer.id, selectedTechnicianId, selectedDuration)
     if (booking) {
       onClose()
     } else {
-      alert('派钟失败，请检查技师状态')
+      alert('派钟失败，技师该时段可能已被占用')
     }
   }
   
@@ -98,12 +104,31 @@ export default function AssignTechnicianModal({
               )}
             </div>
           </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">服务时长</label>
+            <div className="flex gap-2">
+              {DURATION_OPTIONS.map(dur => (
+                <button
+                  key={dur}
+                  onClick={() => setSelectedDuration(dur)}
+                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                    selectedDuration === dur
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  {formatDuration(dur)}
+                </button>
+              ))}
+            </div>
+          </div>
           
           <div className="mb-4">
             <h4 className="font-medium text-gray-700 mb-2">选择技师</h4>
             {availableTechnicians.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                当前没有符合要求的空闲技师
+                当前没有符合要求的空闲技师（{formatDuration(selectedDuration)}）
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 max-h-64 overflow-auto">
@@ -161,7 +186,7 @@ export default function AssignTechnicianModal({
             </button>
             <button
               onClick={handleConfirm}
-              disabled={!selectedTechnicianId}
+              disabled={!selectedTechnicianId || availableTechnicians.length === 0}
               className="flex-1 px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               确认派钟
